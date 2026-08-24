@@ -148,6 +148,47 @@ const Sound = {
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
+
+// ==========================================================================
+//  스프라이트 로더 — Kenney 타워디펜스 도트 에셋 (CC0)
+// ==========================================================================
+const SPRITES = {};
+const SPRITE_FILES = {
+  tower_basic: 'assets/tower_basic.png',
+  tower_sniper: 'assets/tower_sniper.png',
+  tower_rapid: 'assets/tower_rapid.png',
+  enemy_tank: 'assets/enemy_tank.png',
+  enemy_plane: 'assets/enemy_plane.png',
+  enemy_unit: 'assets/enemy_unit.png',
+  bullet: 'assets/bullet.png',
+  rocket: 'assets/rocket.png',
+  tile_grass: 'assets/tile_grass.png',
+  tile_path: 'assets/tile_path.png',
+};
+let spritesLoaded = 0;
+const spritesTotal = Object.keys(SPRITE_FILES).length;
+function loadSprites(onDone) {
+  for (const [key, src] of Object.entries(SPRITE_FILES)) {
+    const img = new Image();
+    img.onload = () => { spritesLoaded++; if (spritesLoaded >= spritesTotal && onDone) onDone(); };
+    img.onerror = () => { spritesLoaded++; SPRITES[key] = null; if (spritesLoaded >= spritesTotal && onDone) onDone(); };
+    img.src = src;
+    SPRITES[key] = img;
+  }
+}
+// 스프라이트를 중심 기준으로 그리기 (크기·회전 지원). 로딩 실패 시 폴백 도형.
+function drawSprite(key, x, y, size, angle) {
+  const img = SPRITES[key];
+  if (img && img.complete && img.naturalWidth > 0) {
+    ctx.save();
+    ctx.translate(x, y);
+    if (angle) ctx.rotate(angle);
+    ctx.drawImage(img, -size/2, -size/2, size, size);
+    ctx.restore();
+    return true;
+  }
+  return false; // 폴백은 호출부에서 처리
+}
 const TILE = 40;
 const COLS = 16, ROWS = 12;
 
@@ -202,10 +243,14 @@ function startWave() {
 }
 
 function spawnEnemy(tmpl) {
+  // 웨이브에 따라 적 외형을 다르게 (탱크/유닛/비행기)
+  const kinds = ['enemy_unit', 'enemy_tank', 'enemy_plane'];
+  const kind = kinds[Math.min(kinds.length-1, Math.floor((state.wave-1)/3))];
   state.enemies.push({
     x: waypoints[0].x, y: waypoints[0].y,
     wp: 1, hp: tmpl.hp, maxHp: tmpl.maxHp,
     speed: tmpl.speed, reward: tmpl.reward,
+    sprite: kind, angle: 0,
   });
 }
 
@@ -249,6 +294,7 @@ function update() {
     } else {
       e.x += (dx/dist) * e.speed * 2;
       e.y += (dy/dist) * e.speed * 2;
+      e.angle = Math.atan2(dy, dx) + Math.PI/2; // 진행 방향 바라보기
     }
   }
 
@@ -276,8 +322,11 @@ function update() {
     if (target) {
       state.projectiles.push({
         x: t.px, y: t.py, target, dmg: t.dmg, color: t.proj, speed: 6,
+        sprite: (t.rate >= 100 ? 'rocket' : 'bullet'),
+        angle: Math.atan2(target.y - t.py, target.x - t.px) + Math.PI/2,
       });
       t.cool = t.rate;
+      t.angle = Math.atan2(target.y - t.py, target.x - t.px) + Math.PI/2; // 타워가 적 조준
       // 발사음 (타워 종류별로 다른 소리)
       if (t.rate >= 100) Sound.sniper();
       else Sound.shoot();
@@ -338,15 +387,18 @@ function update() {
 // ---- 그리기 ----
 function draw() {
   ctx.clearRect(0,0,canvas.width,canvas.height);
-  // 잔디 배경
+  // 잔디/길 배경 — 스프라이트 타일 (로딩 실패 시 색으로 폴백)
   for (let y=0;y<ROWS;y++) for (let x=0;x<COLS;x++) {
     const onPath = pathSet.has(x+','+y);
-    ctx.fillStyle = onPath ? '#5a4a3a' : ((x+y)%2 ? '#2c3550' : '#2a3350');
-    ctx.fillRect(x*TILE, y*TILE, TILE, TILE);
+    const key = onPath ? 'tile_path' : 'tile_grass';
+    const img = SPRITES[key];
+    if (img && img.complete && img.naturalWidth > 0) {
+      ctx.drawImage(img, x*TILE, y*TILE, TILE, TILE);
+    } else {
+      ctx.fillStyle = onPath ? '#6b5842' : ((x+y)%2 ? '#3a7a3a' : '#357035');
+      ctx.fillRect(x*TILE, y*TILE, TILE, TILE);
+    }
   }
-  // 경로 강조 (흙길)
-  ctx.fillStyle = '#6b5842';
-  for (const p of PATH) ctx.fillRect(p.x*TILE+3, p.y*TILE+3, TILE-6, TILE-6);
   // 시작/끝 표시
   const s = waypoints[0], en = waypoints[waypoints.length-1];
   ctx.fillStyle = '#4fd6a0'; ctx.fillRect(s.x-TILE/2, s.y-TILE/2, TILE, 5);
@@ -365,54 +417,44 @@ function draw() {
     }
   }
 
-  // 타워 (글로우 + 회전하는 포신 느낌)
+  // 타워 (도트 스프라이트, 적 조준 방향으로 회전)
   for (const t of state.towers) {
-    // 은은한 글로우
-    const g = ctx.createRadialGradient(t.px, t.py, 2, t.px, t.py, 20);
-    g.addColorStop(0, t.color);
-    g.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = g;
-    ctx.beginPath(); ctx.arc(t.px, t.py, 20, 0, Math.PI*2); ctx.fill();
-    // 본체
-    ctx.fillStyle = t.color;
-    ctx.beginPath(); ctx.arc(t.px, t.py, 14, 0, Math.PI*2); ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,.5)'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(t.px, t.py, 14, 0, Math.PI*2); ctx.stroke();
-    // 중심 코어
-    ctx.fillStyle = '#1a1d29';
-    ctx.beginPath(); ctx.arc(t.px, t.py, 6, 0, Math.PI*2); ctx.fill();
+    if (!drawSprite(t.sprite, t.px, t.py, 34, t.angle || 0)) {
+      // 폴백: 도형
+      ctx.fillStyle = t.color;
+      ctx.beginPath(); ctx.arc(t.px, t.py, 14, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#1a1d29';
+      ctx.beginPath(); ctx.arc(t.px, t.py, 6, 0, Math.PI*2); ctx.fill();
+    }
   }
 
-  // 적 (그라데이션 몸체 + 꿈틀 애니메이션 + 체력바)
+  // 적 (도트 스프라이트, 진행 방향으로 회전 + 체력바)
   for (const e of state.enemies) {
-    const pulse = 11 + Math.sin(state.frame*0.2 + e.x)*1.2; // 살짝 맥동
-    const eg = ctx.createRadialGradient(e.x-3, e.y-3, 1, e.x, e.y, pulse);
-    eg.addColorStop(0, '#ffab70');
-    eg.addColorStop(1, '#e2542a');
-    ctx.fillStyle = eg;
-    ctx.beginPath(); ctx.arc(e.x, e.y, pulse, 0, Math.PI*2); ctx.fill();
-    ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(e.x, e.y, pulse, 0, Math.PI*2); ctx.stroke();
-    // 눈 (진행 방향 느낌)
-    ctx.fillStyle = '#fff';
-    ctx.beginPath(); ctx.arc(e.x+3, e.y-2, 2.5, 0, Math.PI*2); ctx.fill();
-    ctx.fillStyle = '#222';
-    ctx.beginPath(); ctx.arc(e.x+4, e.y-2, 1.2, 0, Math.PI*2); ctx.fill();
-    // 체력바
-    const w = 22, r = Math.max(0, e.hp/e.maxHp);
-    ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(e.x-w/2, e.y-20, w, 4);
+    if (!drawSprite(e.sprite, e.x, e.y, 30, e.angle || 0)) {
+      // 폴백: 도형
+      ctx.fillStyle = '#ff7043';
+      ctx.beginPath(); ctx.arc(e.x, e.y, 11, 0, Math.PI*2); ctx.fill();
+    }
+    // 체력바 (스프라이트 위에)
+    const w = 24, r = Math.max(0, e.hp/e.maxHp);
+    ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(e.x-w/2, e.y-22, w, 4);
     ctx.fillStyle = r>0.5?'#4fd6a0':(r>0.25?'#ffd45e':'#ff6b6b');
-    ctx.fillRect(e.x-w/2, e.y-20, w*r, 4);
+    ctx.fillRect(e.x-w/2, e.y-22, w*r, 4);
   }
 
-  // 총알 (글로우 트레일)
+  // 총알/로켓 (도트 스프라이트, 진행 방향 회전)
   for (const p of state.projectiles) {
-    const pg = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 6);
-    pg.addColorStop(0, '#fff');
-    pg.addColorStop(0.4, p.color);
-    pg.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = pg;
-    ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, Math.PI*2); ctx.fill();
+    // 총알이 타겟을 향하도록 각도 갱신
+    if (p.target && !p.target.dead) {
+      p.angle = Math.atan2(p.target.y - p.y, p.target.x - p.x) + Math.PI/2;
+    }
+    if (!drawSprite(p.sprite, p.x, p.y, 16, p.angle || 0)) {
+      // 폴백: 글로우 점
+      const pg = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 6);
+      pg.addColorStop(0, '#fff'); pg.addColorStop(0.4, p.color); pg.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = pg;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, Math.PI*2); ctx.fill();
+    }
   }
 
   // 파티클 (발사 플래시 · 폭발)
@@ -460,6 +502,8 @@ canvas.addEventListener('click', e => {
     tx, ty, px: tx*TILE+TILE/2, py: ty*TILE+TILE/2,
     range: type.range, dmg: type.dmg, rate: type.rate,
     color: type.color, proj: type.proj, cool: 0,
+    sprite: state.selectedType==='sniper' ? 'tower_sniper' : (state.selectedType==='rapid' ? 'tower_rapid' : 'tower_basic'),
+    angle: 0,
   });
   updateHUD();
   setMsg(type.name + '타워 배치! 남은 골드: ' + state.gold);
@@ -553,6 +597,7 @@ function loop() {
   requestAnimationFrame(loop);
 }
 state = newState();
+loadSprites(() => { /* 로딩 완료 후 자동으로 스프라이트가 그려짐 */ });
 draw();
 loop();
 </script>

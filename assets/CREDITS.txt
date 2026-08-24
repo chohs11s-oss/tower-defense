@@ -1,0 +1,14 @@
+# 그래픽 에셋 출처 및 라이선스
+
+이 게임의 픽셀(도트) 그래픽은 Kenney의 "Tower Defense" 에셋 팩을 사용합니다.
+
+- **제작자:** Kenney (https://kenney.nl)
+- **라이선스:** CC0 1.0 (퍼블릭 도메인)
+- **의미:** 상업적 사용 가능, 수정 가능, 크레딧 표기 의무 없음.
+  (이 파일은 감사 표시 및 출처 기록용이며, 법적으로 요구되는 것은 아님)
+
+사용 중인 스프라이트:
+- tower_basic / tower_sniper / tower_rapid : 타워 3종
+- enemy_tank / enemy_plane / enemy_unit : 적 유닛
+- bullet / rocket : 발사체
+- tile_grass / tile_path : 바닥 타일

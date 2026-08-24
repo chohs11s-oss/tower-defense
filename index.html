@@ -70,7 +70,7 @@
         길을 따라 오는 적을 막으세요.<br>
         <b>1) 아래 타워 버튼을 누르고 → 2) 초록 잔디칸을 클릭</b>해 타워를 세웁니다.<br>
         적을 잡으면 골드를 벌고, 그 골드로 타워를 더 짓습니다.<br>
-        💡 <b>설치된 타워를 클릭하면 아래에 업그레이드 버튼이 나타납니다!</b> (★최대 3레벨)<br>
+        💡 <b>같은 타워를 계속 놓을 수 있고, 설치된 타워를 클릭하면 업그레이드!</b> (★최대 3레벨)<br>
         ⚠️ 적은 3종류 — 🟢기본 / ✈️고속(빠름·약함) / 🚙탱커(느림·튼튼).<br>
         적 종류에 맞게 타워를 조합하세요. ⏩배속으로 빠르게 진행!<br>
         적이 끝까지 가면 생명이 줄고, 0이 되면 게임 오버!
@@ -484,12 +484,12 @@ function draw() {
       ctx.strokeStyle = '#4fd6a0'; ctx.lineWidth = 3;
       ctx.beginPath(); ctx.arc(t.px, t.py, 19, 0, Math.PI*2); ctx.stroke();
     }
-    // 타워 받침대 — 잔디와 확실히 구분되게 어두운 원판 + 밝은 테두리
-    ctx.fillStyle = 'rgba(30,33,45,.85)';
-    ctx.beginPath(); ctx.arc(t.px, t.py, 17, 0, Math.PI*2); ctx.fill();
-    ctx.strokeStyle = '#7a8099'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(t.px, t.py, 17, 0, Math.PI*2); ctx.stroke();
-    if (!drawSprite(t.sprite, t.px, t.py, 34, t.angle || 0)) {
+    // 타워 종류별 색상 원판 — 잔디와 대비되게 (색으로 구분 + 흰 테두리)
+    ctx.fillStyle = t.color;
+    ctx.beginPath(); ctx.arc(t.px, t.py, 16, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(t.px, t.py, 16, 0, Math.PI*2); ctx.stroke();
+    if (!drawSprite(t.sprite, t.px, t.py, 30, t.angle || 0)) {
       // 폴백: 도형
       ctx.fillStyle = t.color;
       ctx.beginPath(); ctx.arc(t.px, t.py, 14, 0, Math.PI*2); ctx.fill();
@@ -583,35 +583,39 @@ canvas.addEventListener('click', e => {
   const tx = Math.floor((e.clientX - r.left) / TILE);
   const ty = Math.floor((e.clientY - r.top) / TILE);
 
-  // 타워 타입을 고르지 않은 상태에서 기존 타워를 클릭 → 선택(정보+업그레이드 패널)
-  if (!state.selectedType) {
-    const t = state.towers.find(t => t.tx===tx && t.ty===ty);
-    if (t) { selectTower(t); }
-    else { deselectTower(); }
+  // 1순위: 그 자리에 이미 타워가 있으면 → 항상 업그레이드 패널 (타워버튼 선택 여부와 무관)
+  const existing = state.towers.find(t => t.tx===tx && t.ty===ty);
+  if (existing) { selectTower(existing); return; }
+
+  // 2순위: 타워 타입이 선택된 상태 → 빈 잔디칸에 설치 (선택은 유지 → 연속 설치 가능)
+  if (state.selectedType) {
+    if (!canPlace(tx,ty)) {
+      setMsg(pathSet.has(tx+','+ty) ? '길 위에는 타워를 못 세워요!' : '골드가 부족해요.');
+      return;
+    }
+    const type = TOWER_TYPES[state.selectedType];
+    state.gold -= type.cost;
+    Sound.place();
+    spawnParticles(tx*TILE+TILE/2, ty*TILE+TILE/2, type.color, 10, [0.5, 2], 16);
+    state.towers.push({
+      tx, ty, px: tx*TILE+TILE/2, py: ty*TILE+TILE/2,
+      range: type.range, dmg: type.dmg, rate: type.rate,
+      color: type.color, proj: type.proj, cool: 0,
+      sprite: state.selectedType==='sniper' ? 'tower_sniper' : (state.selectedType==='rapid' ? 'tower_rapid' : 'tower_basic'),
+      angle: 0, level: 1,
+    });
+    // 선택 유지! (같은 타워를 계속 놓을 수 있게) — 골드가 다 떨어지면 안내만
+    updateHUD();
+    if (state.gold < type.cost) {
+      setMsg('✅ ' + type.name + '타워 배치! (골드 부족 — 더 짓거나, 타워를 클릭해 업그레이드)');
+    } else {
+      setMsg('✅ ' + type.name + '타워 배치! 계속 놓거나, 설치된 타워를 클릭하면 업그레이드 · 남은 골드: ' + state.gold);
+    }
     return;
   }
-  // 타워 타입 선택 상태 → 배치
-  if (!canPlace(tx,ty)) {
-    setMsg(pathSet.has(tx+','+ty) ? '길 위에는 타워를 못 세워요!' : '골드가 부족하거나 이미 타워가 있어요.');
-    return;
-  }
-  const placedType = state.selectedType; // 저장 (아래에서 해제하므로)
-  const type = TOWER_TYPES[placedType];
-  state.gold -= type.cost;
-  Sound.place(); // 타워 설치음
-  spawnParticles(tx*TILE+TILE/2, ty*TILE+TILE/2, type.color, 10, [0.5, 2], 16);
-  state.towers.push({
-    tx, ty, px: tx*TILE+TILE/2, py: ty*TILE+TILE/2,
-    range: type.range, dmg: type.dmg, rate: type.rate,
-    color: type.color, proj: type.proj, cool: 0,
-    sprite: placedType==='sniper' ? 'tower_sniper' : (placedType==='rapid' ? 'tower_rapid' : 'tower_basic'),
-    angle: 0, level: 1,
-  });
-  // ★ 배치 후 자동으로 선택 해제 — 그래야 다음에 타워를 클릭하면 '업그레이드'로 인식됨
-  state.selectedType = null;
-  document.querySelectorAll('.towerBtn').forEach(b => b.classList.remove('active'));
-  updateHUD();
-  setMsg('✅ ' + type.name + '타워 배치 완료! 💡 타워를 다시 클릭하면 업그레이드할 수 있어요. 남은 골드: ' + state.gold);
+
+  // 3순위: 아무것도 선택 안 한 상태에서 빈 칸 클릭 → 패널 닫기
+  deselectTower();
 });
 
 // 타워 선택 → 정보 + 업그레이드 패널 표시

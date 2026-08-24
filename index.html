@@ -484,6 +484,11 @@ function draw() {
       ctx.strokeStyle = '#4fd6a0'; ctx.lineWidth = 3;
       ctx.beginPath(); ctx.arc(t.px, t.py, 19, 0, Math.PI*2); ctx.stroke();
     }
+    // 타워 받침대 — 잔디와 확실히 구분되게 어두운 원판 + 밝은 테두리
+    ctx.fillStyle = 'rgba(30,33,45,.85)';
+    ctx.beginPath(); ctx.arc(t.px, t.py, 17, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#7a8099'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(t.px, t.py, 17, 0, Math.PI*2); ctx.stroke();
     if (!drawSprite(t.sprite, t.px, t.py, 34, t.angle || 0)) {
       // 폴백: 도형
       ctx.fillStyle = t.color;
@@ -590,7 +595,8 @@ canvas.addEventListener('click', e => {
     setMsg(pathSet.has(tx+','+ty) ? '길 위에는 타워를 못 세워요!' : '골드가 부족하거나 이미 타워가 있어요.');
     return;
   }
-  const type = TOWER_TYPES[state.selectedType];
+  const placedType = state.selectedType; // 저장 (아래에서 해제하므로)
+  const type = TOWER_TYPES[placedType];
   state.gold -= type.cost;
   Sound.place(); // 타워 설치음
   spawnParticles(tx*TILE+TILE/2, ty*TILE+TILE/2, type.color, 10, [0.5, 2], 16);
@@ -598,11 +604,14 @@ canvas.addEventListener('click', e => {
     tx, ty, px: tx*TILE+TILE/2, py: ty*TILE+TILE/2,
     range: type.range, dmg: type.dmg, rate: type.rate,
     color: type.color, proj: type.proj, cool: 0,
-    sprite: state.selectedType==='sniper' ? 'tower_sniper' : (state.selectedType==='rapid' ? 'tower_rapid' : 'tower_basic'),
+    sprite: placedType==='sniper' ? 'tower_sniper' : (placedType==='rapid' ? 'tower_rapid' : 'tower_basic'),
     angle: 0, level: 1,
   });
+  // ★ 배치 후 자동으로 선택 해제 — 그래야 다음에 타워를 클릭하면 '업그레이드'로 인식됨
+  state.selectedType = null;
+  document.querySelectorAll('.towerBtn').forEach(b => b.classList.remove('active'));
   updateHUD();
-  setMsg(type.name + '타워 배치! (설치된 타워를 클릭하면 업그레이드) 남은 골드: ' + state.gold);
+  setMsg('✅ ' + type.name + '타워 배치 완료! 💡 타워를 다시 클릭하면 업그레이드할 수 있어요. 남은 골드: ' + state.gold);
 });
 
 // 타워 선택 → 정보 + 업그레이드 패널 표시
@@ -632,7 +641,7 @@ function updateTowerPanel() {
     btn.textContent = '최대 레벨 ★' + MAX;
     btn.disabled = true;
   } else {
-    const cost = 40 + t.level * 30;
+    const cost = 30 + t.level * 20;
     btn.textContent = '⬆️ 업그레이드 (' + cost + '골드)';
     btn.disabled = state.gold < cost;
   }
@@ -644,7 +653,7 @@ function tryUpgrade(t) {
   if (!t) return;
   const MAX = 3;
   if (t.level >= MAX) { setMsg('이미 최대 레벨(★' + MAX + ')입니다.'); Sound.click(); return; }
-  const cost = 40 + t.level * 30; // 레벨 오를수록 비쌈
+  const cost = 30 + t.level * 20; // 레벨 오를수록 비쌈 (1→2:50, 2→3:70)
   if (state.gold < cost) { setMsg('업그레이드에 ' + cost + '골드 필요 (보유 ' + state.gold + ')'); Sound.click(); return; }
   state.gold -= cost;
   t.level++;

@@ -75,6 +75,77 @@
   <div id="msg">게임 시작을 눌러주세요.</div>
 
 <script>
+// ==========================================================================
+//  사운드 엔진 — Web Audio API로 효과음을 코드로 직접 합성 (외부 파일·라이선스 불필요)
+// ==========================================================================
+const Sound = {
+  ctx: null,
+  enabled: true,
+  bgmTimer: null,
+  init() {
+    if (this.ctx) return;
+    try { this.ctx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch(e) { this.enabled = false; }
+  },
+  // 기본 톤 생성기 (파형·주파수·길이·볼륨)
+  tone(freq, dur, type='square', vol=0.15, slideTo=null) {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t);
+    if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+    gain.gain.setValueAtTime(vol, t);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(gain); gain.connect(this.ctx.destination);
+    osc.start(t); osc.stop(t + dur);
+  },
+  // 노이즈 버스트 (폭발·타격감)
+  noise(dur, vol=0.2) {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    const bufSize = this.ctx.sampleRate * dur;
+    const buf = this.ctx.createBuffer(1, bufSize, this.ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i=0;i<bufSize;i++) data[i] = (Math.random()*2-1) * (1 - i/bufSize);
+    const src = this.ctx.createBufferSource(); src.buffer = buf;
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(vol, t);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(gain); gain.connect(this.ctx.destination);
+    src.start(t);
+  },
+  shoot()  { this.tone(660, 0.08, 'square', 0.06, 220); },   // 발사음
+  sniper() { this.tone(140, 0.18, 'sawtooth', 0.12, 60); },  // 저격음(묵직)
+  hit()    { this.noise(0.12, 0.10); },                       // 적 처치(폭발)
+  place()  { this.tone(520, 0.10, 'triangle', 0.12, 780); },  // 타워 설치(상승)
+  click()  { this.tone(400, 0.05, 'sine', 0.08); },           // UI 클릭
+  waveClear(){ [523,659,784].forEach((f,i)=> setTimeout(()=>this.tone(f,0.15,'triangle',0.12), i*120)); },
+  lose()   { this.tone(200, 0.5, 'sawtooth', 0.15, 60); },    // 생명 감소
+  win()    { [523,659,784,1046].forEach((f,i)=> setTimeout(()=>this.tone(f,0.25,'triangle',0.14), i*150)); },
+  gameover(){ [400,300,200].forEach((f,i)=> setTimeout(()=>this.tone(f,0.35,'sawtooth',0.14), i*200)); },
+  // 배경음악 — 간단한 아르페지오 루프를 코드로 생성
+  startBGM() {
+    if (!this.enabled || !this.ctx || this.bgmTimer) return;
+    const scale = [220, 261.63, 329.63, 392, 440, 392, 329.63, 261.63];
+    let i = 0;
+    this.bgmTimer = setInterval(() => {
+      if (!this.enabled) return;
+      this.tone(scale[i % scale.length], 0.35, 'triangle', 0.035);
+      if (i % 2 === 0) this.tone(scale[i % scale.length]/2, 0.7, 'sine', 0.03);
+      i++;
+    }, 400);
+  },
+  stopBGM() { if (this.bgmTimer) { clearInterval(this.bgmTimer); this.bgmTimer = null; } },
+  toggle() {
+    this.enabled = !this.enabled;
+    if (!this.enabled) this.stopBGM();
+    else if (state && state.running && !state.gameOver) this.startBGM();
+    return this.enabled;
+  }
+};
+
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const TILE = 40;
@@ -104,7 +175,7 @@ let state = null;
 function newState() {
   return {
     gold: 100, lives: 10, wave: 0, maxWave: 10,
-    towers: [], enemies: [], projectiles: [],
+    towers: [], enemies: [], projectiles: [], particles: [],
     selectedType: null,
     running: false, gameOver: false, win: false,
     spawnQueue: [], spawnTimer: 0, waveActive: false,
@@ -136,6 +207,18 @@ function spawnEnemy(tmpl) {
     wp: 1, hp: tmpl.hp, maxHp: tmpl.maxHp,
     speed: tmpl.speed, reward: tmpl.reward,
   });
+}
+
+// 파티클 생성 헬퍼 (폭발·발사 이펙트)
+function spawnParticles(x, y, color, count, speedRange, life) {
+  for (let i = 0; i < count; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const spd = speedRange[0] + Math.random() * (speedRange[1] - speedRange[0]);
+    state.particles.push({
+      x, y, vx: Math.cos(ang)*spd, vy: Math.sin(ang)*spd,
+      life, maxLife: life, color, size: 2 + Math.random()*2,
+    });
+  }
 }
 
 // ---- 매 프레임 업데이트 ----
@@ -174,6 +257,7 @@ function update() {
     if (e.reached) {
       state.lives--;
       e.dead = true;
+      Sound.lose(); // 생명 감소 경고음
       if (state.lives <= 0) { state.lives = 0; endGame(false); }
     }
   }
@@ -194,6 +278,11 @@ function update() {
         x: t.px, y: t.py, target, dmg: t.dmg, color: t.proj, speed: 6,
       });
       t.cool = t.rate;
+      // 발사음 (타워 종류별로 다른 소리)
+      if (t.rate >= 100) Sound.sniper();
+      else Sound.shoot();
+      // 발사 머즐 플래시 파티클
+      spawnParticles(t.px, t.py, t.proj, 4, [0.5, 1.5], 12);
     }
   }
 
@@ -209,6 +298,8 @@ function update() {
         p.target.counted = true;
         p.target.dead = true;
         state.gold += p.target.reward;
+        Sound.hit(); // 처치 폭발음
+        spawnParticles(p.target.x, p.target.y, '#ff7043', 14, [1, 3.5], 22); // 폭발 파티클
       }
     } else {
       p.x += (dx/d) * p.speed;
@@ -216,9 +307,18 @@ function update() {
     }
   }
 
+  // 파티클 업데이트 (이동 + 수명 감소)
+  for (const pt of state.particles) {
+    pt.x += pt.vx; pt.y += pt.vy;
+    pt.vx *= 0.92; pt.vy *= 0.92; // 감속
+    pt.life--;
+    if (pt.life <= 0) pt.dead = true;
+  }
+
   // 죽은 객체 정리
   state.enemies = state.enemies.filter(e => !e.dead);
   state.projectiles = state.projectiles.filter(p => !p.dead);
+  state.particles = state.particles.filter(p => !p.dead);
 
   // 웨이브 종료 판정
   if (state.waveActive && state.spawnQueue.length === 0 && state.enemies.length === 0) {
@@ -227,6 +327,7 @@ function update() {
     if (state.wave >= state.maxWave) {
       endGame(true);
     } else {
+      Sound.waveClear(); // 웨이브 클리어 팡파레
       setMsg('웨이브 ' + state.wave + ' 클리어! +20골드. 다음 웨이브를 준비하세요.');
     }
   }
@@ -264,30 +365,64 @@ function draw() {
     }
   }
 
-  // 타워
+  // 타워 (글로우 + 회전하는 포신 느낌)
   for (const t of state.towers) {
+    // 은은한 글로우
+    const g = ctx.createRadialGradient(t.px, t.py, 2, t.px, t.py, 20);
+    g.addColorStop(0, t.color);
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(t.px, t.py, 20, 0, Math.PI*2); ctx.fill();
+    // 본체
     ctx.fillStyle = t.color;
     ctx.beginPath(); ctx.arc(t.px, t.py, 14, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.5)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(t.px, t.py, 14, 0, Math.PI*2); ctx.stroke();
+    // 중심 코어
     ctx.fillStyle = '#1a1d29';
     ctx.beginPath(); ctx.arc(t.px, t.py, 6, 0, Math.PI*2); ctx.fill();
   }
 
-  // 적
+  // 적 (그라데이션 몸체 + 꿈틀 애니메이션 + 체력바)
   for (const e of state.enemies) {
-    ctx.fillStyle = '#ff7043';
-    ctx.beginPath(); ctx.arc(e.x, e.y, 11, 0, Math.PI*2); ctx.fill();
+    const pulse = 11 + Math.sin(state.frame*0.2 + e.x)*1.2; // 살짝 맥동
+    const eg = ctx.createRadialGradient(e.x-3, e.y-3, 1, e.x, e.y, pulse);
+    eg.addColorStop(0, '#ffab70');
+    eg.addColorStop(1, '#e2542a');
+    ctx.fillStyle = eg;
+    ctx.beginPath(); ctx.arc(e.x, e.y, pulse, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(e.x, e.y, pulse, 0, Math.PI*2); ctx.stroke();
+    // 눈 (진행 방향 느낌)
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(e.x+3, e.y-2, 2.5, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#222';
+    ctx.beginPath(); ctx.arc(e.x+4, e.y-2, 1.2, 0, Math.PI*2); ctx.fill();
     // 체력바
     const w = 22, r = Math.max(0, e.hp/e.maxHp);
-    ctx.fillStyle = '#000'; ctx.fillRect(e.x-w/2, e.y-18, w, 4);
+    ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(e.x-w/2, e.y-20, w, 4);
     ctx.fillStyle = r>0.5?'#4fd6a0':(r>0.25?'#ffd45e':'#ff6b6b');
-    ctx.fillRect(e.x-w/2, e.y-18, w*r, 4);
+    ctx.fillRect(e.x-w/2, e.y-20, w*r, 4);
   }
 
-  // 총알
+  // 총알 (글로우 트레일)
   for (const p of state.projectiles) {
-    ctx.fillStyle = p.color;
-    ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI*2); ctx.fill();
+    const pg = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 6);
+    pg.addColorStop(0, '#fff');
+    pg.addColorStop(0.4, p.color);
+    pg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = pg;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, Math.PI*2); ctx.fill();
   }
+
+  // 파티클 (발사 플래시 · 폭발)
+  for (const pt of state.particles) {
+    const alpha = pt.life / pt.maxLife;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = pt.color;
+    ctx.beginPath(); ctx.arc(pt.x, pt.y, pt.size * alpha, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
 }
 
 // ---- 배치 가능 여부 ----
@@ -319,6 +454,8 @@ canvas.addEventListener('click', e => {
   }
   const type = TOWER_TYPES[state.selectedType];
   state.gold -= type.cost;
+  Sound.place(); // 타워 설치음
+  spawnParticles(tx*TILE+TILE/2, ty*TILE+TILE/2, type.color, 10, [0.5, 2], 16);
   state.towers.push({
     tx, ty, px: tx*TILE+TILE/2, py: ty*TILE+TILE/2,
     range: type.range, dmg: type.dmg, rate: type.rate,
@@ -336,10 +473,11 @@ function selectType(type) {
   document.getElementById(map[type]).classList.add('active');
   setMsg(TOWER_TYPES[type].name + '타워 선택됨 — 초록 잔디칸을 클릭해 배치하세요.');
 }
-document.getElementById('towerBasic').onclick = () => selectType('basic');
-document.getElementById('towerSniper').onclick = () => selectType('sniper');
-document.getElementById('towerRapid').onclick = () => selectType('rapid');
+document.getElementById('towerBasic').onclick = () => { Sound.click(); selectType('basic'); };
+document.getElementById('towerSniper').onclick = () => { Sound.click(); selectType('sniper'); };
+document.getElementById('towerRapid').onclick = () => { Sound.click(); selectType('rapid'); };
 document.getElementById('cancelBtn').onclick = () => {
+  Sound.click();
   state.selectedType = null;
   document.querySelectorAll('.towerBtn').forEach(b => b.classList.remove('active'));
   setMsg('선택 취소됨.');
@@ -360,6 +498,8 @@ function setMsg(m) { document.getElementById('msg').textContent = m; }
 // ---- 게임 시작/종료 ----
 const overlay = document.getElementById('overlay');
 function beginGame() {
+  Sound.init();        // 오디오 컨텍스트 활성화 (사용자 클릭 시점 = 자동재생 정책 통과)
+  Sound.startBGM();    // 배경음악 시작
   state = newState();
   state.running = true;
   overlay.classList.add('hidden');
@@ -371,6 +511,8 @@ function beginGame() {
 function endGame(win) {
   state.gameOver = true;
   state.win = win;
+  Sound.stopBGM();
+  if (win) Sound.win(); else Sound.gameover();
   overlay.classList.remove('hidden');
   overlay.innerHTML = win
     ? '<div class="big">🎉 승리!</div><div class="hint">10개 웨이브를 모두 막아냈습니다!<br>남은 생명: '+state.lives+'</div><button id="againBtn">다시 하기 🔄</button>'
@@ -378,6 +520,18 @@ function endGame(win) {
   document.getElementById('againBtn').onclick = beginGame;
 }
 document.getElementById('startBtn').onclick = beginGame;
+
+// 🔊 음소거 토글 버튼
+(function addMuteButton(){
+  const btn = document.createElement('button');
+  btn.id = 'muteBtn';
+  btn.textContent = '🔊 소리 켜짐';
+  btn.onclick = () => {
+    const on = Sound.toggle();
+    btn.textContent = on ? '🔊 소리 켜짐' : '🔇 소리 꺼짐';
+  };
+  document.getElementById('controls').appendChild(btn);
+})();
 
 // "다음 웨이브" 버튼을 controls에 추가
 function ensureWaveButton() {

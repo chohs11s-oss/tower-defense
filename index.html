@@ -377,7 +377,8 @@ function update() {
       endGame(true);
     } else {
       Sound.waveClear(); // 웨이브 클리어 팡파레
-      setMsg('웨이브 ' + state.wave + ' 클리어! +20골드. 다음 웨이브를 준비하세요.');
+      updateWaveButton(); // 버튼을 "다음 웨이브"로 갱신
+      setMsg('✅ 웨이브 ' + state.wave + ' 클리어! +20골드. 준비되면 "다음 웨이브"를 누르세요.');
     }
   }
 
@@ -548,9 +549,10 @@ function beginGame() {
   state.running = true;
   overlay.classList.add('hidden');
   updateHUD();
-  setMsg('타워를 세우고 아래 "다음 웨이브" 버튼으로 적을 부르세요!');
   ensureWaveButton();
-  startWave(); // 첫 웨이브 자동 시작
+  updateWaveButton();
+  setMsg('🛡️ 준비 시간! 타워를 배치한 뒤, 아래 "웨이브 시작" 버튼을 누르면 적이 옵니다.');
+  // 첫 웨이브는 자동 시작하지 않음 — 플레이어가 배치 후 직접 시작
 }
 function endGame(win) {
   state.gameOver = true;
@@ -577,18 +579,40 @@ document.getElementById('startBtn').onclick = beginGame;
   document.getElementById('controls').appendChild(btn);
 })();
 
-// "다음 웨이브" 버튼을 controls에 추가
+// "웨이브 시작 / 다음 웨이브" 버튼 — 상황에 따라 텍스트가 바뀜
 function ensureWaveButton() {
   if (document.getElementById('nextWaveBtn')) return;
   const btn = document.createElement('button');
   btn.id = 'nextWaveBtn';
-  btn.textContent = '다음 웨이브 ⏭';
-  btn.style.background = '#8a6d3b';
   btn.onclick = () => {
-    if (!state.waveActive) startWave();
-    else setMsg('아직 현재 웨이브가 진행 중입니다.');
+    if (state.gameOver) return;
+    if (!state.waveActive && state.wave < state.maxWave) {
+      Sound.click();
+      startWave();
+      updateWaveButton();
+    }
   };
   document.getElementById('controls').appendChild(btn);
+}
+// 버튼 상태 갱신: 준비중이면 강조된 "웨이브 시작", 진행중이면 비활성
+function updateWaveButton() {
+  const btn = document.getElementById('nextWaveBtn');
+  if (!btn || !state) return;
+  if (state.waveActive) {
+    btn.textContent = '⚔️ 웨이브 ' + state.wave + ' 진행 중...';
+    btn.disabled = true;
+    btn.style.background = '#555a6e';
+  } else if (state.wave >= state.maxWave) {
+    btn.textContent = '마지막 웨이브';
+    btn.disabled = true;
+    btn.style.background = '#555a6e';
+  } else {
+    const next = state.wave + 1;
+    btn.textContent = (state.wave === 0 ? '▶ 웨이브 시작!' : '▶ 다음 웨이브 (' + next + '/' + state.maxWave + ')');
+    btn.disabled = false;
+    btn.style.background = '#2e7d5b';
+    btn.style.outline = '2px solid #4fd6a0';
+  }
 }
 
 // ---- 메인 루프 ----
